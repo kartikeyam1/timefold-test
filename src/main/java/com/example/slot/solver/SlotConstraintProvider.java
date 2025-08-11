@@ -1,25 +1,24 @@
 package com.example.slot.solver;
 
-import static java.time.temporal.ChronoUnit.DAYS;
-
-import java.time.LocalTime;
-import java.util.List;
-
+import ai.timefold.solver.core.api.score.buildin.hardsoft.HardSoftScore;
+import ai.timefold.solver.core.api.score.stream.Constraint;
+import ai.timefold.solver.core.api.score.stream.ConstraintCollectors;
+import ai.timefold.solver.core.api.score.stream.ConstraintFactory;
+import ai.timefold.solver.core.api.score.stream.ConstraintProvider;
+import ai.timefold.solver.core.api.score.stream.Joiners;
 import com.example.slot.domain.Order;
 import com.example.slot.domain.ShiftBucket;
 
-import ai.timefold.solver.core.api.score.buildin.hardsoft.HardSoftScore;
-import ai.timefold.solver.core.api.score.stream.Constraint;
-import ai.timefold.solver.core.api.score.stream.ConstraintFactory;
-import ai.timefold.solver.core.api.score.stream.ConstraintProvider;
-import ai.timefold.solver.core.api.score.stream.ConstraintCollectors;
-import ai.timefold.solver.core.api.score.stream.Joiners;
+import java.time.LocalTime;
+
+import static java.time.temporal.ChronoUnit.DAYS;
 
 public class SlotConstraintProvider implements ConstraintProvider {
 
     @Override
     public Constraint[] defineConstraints(ConstraintFactory factory) {
-        return new Constraint[] {
+        return new Constraint[]{
+
                 // Hard constraints
                 orderMustBeOnAllowedDay(factory),
                 capacityMustNotBeExceeded(factory),
@@ -27,7 +26,7 @@ public class SlotConstraintProvider implements ConstraintProvider {
                 vehicleWeightMustNotBeExceeded(factory),
                 vehicleVolumeMustNotBeExceeded(factory),
                 bufferCapacityMustBeRespected(factory),
-                
+
                 // Soft constraints
                 preferEarliestDay(factory),
                 balanceMovableVsNonMovable(factory),
@@ -160,7 +159,7 @@ public class SlotConstraintProvider implements ConstraintProvider {
                         Joiners.lessThan(Order::getId))
                 .reward(HardSoftScore.ONE_SOFT, (order1, order2) -> {
                     double distance = haversineKm(order1.getLatitude(), order1.getLongitude(),
-                                                  order2.getLatitude(), order2.getLongitude());
+                            order2.getLatitude(), order2.getLongitude());
                     return distance < 2.0 ? 10 : 0; // Reward if within 2km
                 })
                 .asConstraint("Clustering bonus for nearby orders");
@@ -168,15 +167,15 @@ public class SlotConstraintProvider implements ConstraintProvider {
 
     private Constraint customerTimeWindowPreference(ConstraintFactory factory) {
         return factory.forEach(Order.class)
-                .filter(order -> order.getAssignedShift() != null 
-                        && order.getPreferredStartTime() != null 
+                .filter(order -> order.getAssignedShift() != null
+                        && order.getPreferredStartTime() != null
                         && order.getPreferredEndTime() != null)
                 .penalize(HardSoftScore.ONE_SOFT, order -> {
                     // Assume shift starts at 9 AM for simplicity
                     LocalTime shiftStart = LocalTime.of(9, 0);
                     LocalTime orderPrefStart = order.getPreferredStartTime();
                     LocalTime orderPrefEnd = order.getPreferredEndTime();
-                    
+
                     // Penalty if shift start is outside customer's preferred window
                     if (shiftStart.isBefore(orderPrefStart)) {
                         return (int) java.time.Duration.between(shiftStart, orderPrefStart).toMinutes() / 30;

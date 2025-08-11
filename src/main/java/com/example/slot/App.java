@@ -3,16 +3,18 @@ package com.example.slot;
 import ai.timefold.solver.core.api.score.buildin.hardsoft.HardSoftScore;
 import ai.timefold.solver.core.api.solver.Solver;
 import ai.timefold.solver.core.api.solver.SolverFactory;
-import ai.timefold.solver.core.config.solver.EnvironmentMode;
 import ai.timefold.solver.core.config.solver.SolverConfig;
+import com.example.slot.config.SolverConfigFactory;
 import com.example.slot.domain.Order;
 import com.example.slot.domain.ShiftBucket;
 import com.example.slot.domain.SlotSchedule;
-import com.example.slot.solver.SlotConstraintProvider;
 
 import java.io.FileWriter;
 import java.io.IOException;
-import java.time.Duration;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -30,11 +32,15 @@ import java.util.stream.Collectors;
 
 public class App {
 
-    private static final String FILE_INPUT_ORDERS = "input_orders.csv";
-    private static final String FILE_INPUT_RIDERS = "input_riders.csv";
-    private static final String FILE_OUTPUT_ASSIGNMENTS = "output_assignments.csv";
-    private static final String FILE_OUTPUT_SHIFT_SUMMARY = "output_shift_summary.csv";
-    private static final String FILE_OUTPUT_DAILY_SUMMARY = "output_daily_summary.csv";
+    // Configuration for CSV output
+    private static final String CSV_OUTPUT_DIR = "csv_output";
+    private static final String FILE_SUFFIX = "_v1"; // Change this suffix as needed
+    
+    private static final String FILE_INPUT_ORDERS = CSV_OUTPUT_DIR + "/input_orders" + FILE_SUFFIX + ".csv";
+    private static final String FILE_INPUT_RIDERS = CSV_OUTPUT_DIR + "/input_riders" + FILE_SUFFIX + ".csv";
+    private static final String FILE_OUTPUT_ASSIGNMENTS = CSV_OUTPUT_DIR + "/output_assignments" + FILE_SUFFIX + ".csv";
+    private static final String FILE_OUTPUT_SHIFT_SUMMARY = CSV_OUTPUT_DIR + "/output_shift_summary" + FILE_SUFFIX + ".csv";
+    private static final String FILE_OUTPUT_DAILY_SUMMARY = CSV_OUTPUT_DIR + "/output_daily_summary" + FILE_SUFFIX + ".csv";
 
     private static String csvEscape(String s) {
         if (s == null) return "";
@@ -48,25 +54,43 @@ public class App {
         return (numerator * 100.0) / denominator;
     }
 
+    private static void ensureCsvDirectoryExists() {
+        try {
+            Path csvDir = Paths.get(CSV_OUTPUT_DIR);
+            if (!Files.exists(csvDir)) {
+                Files.createDirectories(csvDir);
+                System.out.println("Created CSV output directory: " + CSV_OUTPUT_DIR);
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to create CSV output directory: " + e.getMessage());
+        }
+    }
+
     public static void main(String[] args) {
         var schedule = generateSampleProblem();
+
+        // Ensure CSV output directory exists
+        ensureCsvDirectoryExists();
 
         // Export input to CSV
         exportInputToCSV(schedule);
 
         prettyPrintInput(schedule);
 
-        SolverConfig solverConfig = new SolverConfig()
-                .withSolutionClass(SlotSchedule.class)
-                .withEntityClasses(Order.class)
-                .withConstraintProviderClass(SlotConstraintProvider.class)
-                .withEnvironmentMode(EnvironmentMode.REPRODUCIBLE)
-                .withTerminationSpentLimit(Duration.ofSeconds(60));
+        // Create solver configuration
+        SolverConfig solverConfig = SolverConfigFactory.createConfig();
+        
+        System.out.println("Starting optimization with " + schedule.getOrderList().size() + 
+                          " orders and " + schedule.getShiftList().size() + " shift buckets...");
 
         SolverFactory<SlotSchedule> solverFactory = SolverFactory.create(solverConfig);
         Solver<SlotSchedule> solver = solverFactory.buildSolver();
 
+        long startTime = System.currentTimeMillis();
         SlotSchedule solution = solver.solve(schedule);
+        long endTime = System.currentTimeMillis();
+
+        System.out.println("Solving completed in " + (endTime - startTime) / 1000.0 + " seconds");
 
         // Export output to CSV
         exportOutputToCSV(solution);
@@ -86,14 +110,14 @@ public class App {
 
         LocalDate base = LocalDate.now().withMonth(8).withDayOfMonth(3); // Aug 3
         int days = 5;
-        int ridersPerDay = 50;
-        int capacityPerRiderPerDay = 20; // capacity per rider/day
-        double movableThreshold = 0.7; // 70% movable per rider/day
-        int orderCount = 500;
+        int ridersPerDay = 200; // Increased for 5000 orders
+        int capacityPerRiderPerDay = 30; // Further increased capacity per rider/day
+        double movableThreshold = 0.8; // 80% movable per rider/day  
+        int orderCount = 5000;
 
         Random random = new Random(123);
 
-        // Build shifts: 5 days * 20 riders/day = 100 rider-day buckets
+        // Build shifts: 5 days * 200 riders/day = 1000 rider-day buckets
         List<ShiftBucket> shifts = new ArrayList<>(days * ridersPerDay);
         String[] skillTypes = {"ELECTRICAL", "PLUMBING", "GENERAL", "HEAVY_LIFTING"};
 
@@ -112,10 +136,10 @@ public class App {
                     riderSkills.add(skillTypes[random.nextInt(skillTypes.length)]);
                 }
 
-                // Vehicle constraints: weight 100-200kg, volume 2-5 cubic meters
-                double maxWeight = 100 + random.nextDouble() * 100;
-                double maxVolume = 2 + random.nextDouble() * 3;
-                double bufferRatio = 0.15; // Reserve 15% capacity for future orders
+                // Vehicle constraints: weight 200-400kg, volume 5-10 cubic meters (more generous)
+                double maxWeight = 200 + random.nextDouble() * 200;
+                double maxVolume = 5 + random.nextDouble() * 5;
+                double bufferRatio = 0.10; // Reserve 10% capacity for future orders (reduced from 15%)
 
                 shifts.add(new ShiftBucket(id, riderId, date, capacityPerRiderPerDay, movableThreshold,
                         depot[0], depot[1], riderSkills, maxWeight, maxVolume, bufferRatio));
@@ -153,9 +177,9 @@ public class App {
             double weight = 5 + random.nextDouble() * 45;
             double volume = 0.1 + random.nextDouble() * 1.9;
 
-            // Required skills: 30% chance of needing specific skill
+            // Required skills: 20% chance of needing specific skill (reduced from 30%)
             Set<String> requiredSkills = new HashSet<>();
-            if (random.nextDouble() < 0.3) {
+            if (random.nextDouble() < 0.2) {
                 requiredSkills.add(skillTypes[random.nextInt(skillTypes.length)]);
             }
 
@@ -313,7 +337,9 @@ public class App {
                             shift.getMovableOccupationRatioThreshold()));
                 }
             }
-            System.out.println("Input exported to: " + FILE_INPUT_ORDERS + " and " + FILE_INPUT_RIDERS);
+            System.out.println("Input exported to:");
+            System.out.println("  Orders: " + FILE_INPUT_ORDERS);
+            System.out.println("  Riders: " + FILE_INPUT_RIDERS);
         } catch (IOException e) {
             System.err.println("Error exporting input CSV: " + e.getMessage());
         }
@@ -393,7 +419,10 @@ public class App {
                     }
                 });
             }
-            System.out.println("Output exported to: " + FILE_OUTPUT_ASSIGNMENTS + ", " + FILE_OUTPUT_SHIFT_SUMMARY + ", " + FILE_OUTPUT_DAILY_SUMMARY);
+            System.out.println("Output exported to:");
+            System.out.println("  Assignments: " + FILE_OUTPUT_ASSIGNMENTS);
+            System.out.println("  Shift summary: " + FILE_OUTPUT_SHIFT_SUMMARY);
+            System.out.println("  Daily summary: " + FILE_OUTPUT_DAILY_SUMMARY);
         } catch (IOException e) {
             System.err.println("Error exporting output CSV: " + e.getMessage());
         }
