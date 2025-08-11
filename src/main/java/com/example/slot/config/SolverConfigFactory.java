@@ -17,7 +17,7 @@ public class SolverConfigFactory {
 
     // Change this value for different solving times
     private static final int SOLVING_TIME_SECONDS = 120; // 2 minutes for local testing, change to 1800 for 30min prod
-    
+
     // Private constructor to prevent instantiation
     private SolverConfigFactory() {
     }
@@ -34,7 +34,7 @@ public class SolverConfigFactory {
                 .withEnvironmentMode(EnvironmentMode.NON_REPRODUCIBLE)
                 .withTerminationConfig(new TerminationConfig()
                         .withSpentLimit(Duration.ofSeconds(SOLVING_TIME_SECONDS))
-                        .withUnimprovedSpentLimit(Duration.ofSeconds(SOLVING_TIME_SECONDS / 4)) // Stop if no improvement for 25% of total time
-                        .withBestScoreLimit("0hard/-10000soft")); // Stop if excellent score achieved
+                        .withUnimprovedSpentLimit(Duration.ofSeconds(SOLVING_TIME_SECONDS / 4))); // Stop if no improvement for 25% of total time
+        // .withBestScoreLimit("0hard/-10000soft")); // Stop if excellent score achieved
     }
 }

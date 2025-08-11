@@ -1,20 +1,20 @@
 package com.example.slot;
 
 import ai.timefold.solver.core.api.score.buildin.hardsoft.HardSoftScore;
-import ai.timefold.solver.core.api.solver.Solver;
 import ai.timefold.solver.core.api.solver.SolverFactory;
+import ai.timefold.solver.core.api.solver.SolverManager;
 import ai.timefold.solver.core.config.solver.SolverConfig;
 import com.example.slot.config.SolverConfigFactory;
 import com.example.slot.domain.Order;
 import com.example.slot.domain.ShiftBucket;
 import com.example.slot.domain.SlotSchedule;
+import com.example.slot.solver.ProgressTracker;
 
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
@@ -28,13 +28,18 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
-public class App {
+/**
+ * Enhanced App with real-time progress tracking during optimization.
+ * Uses SolverManager to monitor intermediate solutions.
+ */
+public class AppWithProgress {
 
     // Configuration for CSV output
     private static final String CSV_BASE_DIR = "csv_output";
-    private static final String RUN_VERSION = "v1"; // Change this version as needed (e.g., v1, v2, prod, test)
+    private static final String RUN_VERSION = "v2"; // Different version for progress-enabled runs
     private static final String CSV_OUTPUT_DIR = CSV_BASE_DIR + "/" + RUN_VERSION;
     
     private static final String FILE_INPUT_ORDERS = CSV_OUTPUT_DIR + "/input_orders.csv";
@@ -42,6 +47,11 @@ public class App {
     private static final String FILE_OUTPUT_ASSIGNMENTS = CSV_OUTPUT_DIR + "/output_assignments.csv";
     private static final String FILE_OUTPUT_SHIFT_SUMMARY = CSV_OUTPUT_DIR + "/output_shift_summary.csv";
     private static final String FILE_OUTPUT_DAILY_SUMMARY = CSV_OUTPUT_DIR + "/output_daily_summary.csv";
+    private static final String FILE_PROGRESS_LOG = CSV_OUTPUT_DIR + "/progress_log.csv";
+
+    private static final ProgressTracker progressTracker = new ProgressTracker();
+    private static final AtomicReference<SlotSchedule> bestSolutionSoFar = new AtomicReference<>();
+    private static final List<String> progressLog = new ArrayList<>();
 
     private static String csvEscape(String s) {
         if (s == null) return "";
@@ -75,27 +85,14 @@ public class App {
 
         // Export input to CSV
         exportInputToCSV(schedule);
-
         prettyPrintInput(schedule);
 
-        // Create solver configuration
-        SolverConfig solverConfig = SolverConfigFactory.createConfig();
-        
-        System.out.println("Starting optimization with " + schedule.getOrderList().size() + 
-                          " orders and " + schedule.getShiftList().size() + " shift buckets...");
-
-        SolverFactory<SlotSchedule> solverFactory = SolverFactory.create(solverConfig);
-        Solver<SlotSchedule> solver = solverFactory.buildSolver();
-
-        long startTime = System.currentTimeMillis();
-        SlotSchedule solution = solver.solve(schedule);
-        long endTime = System.currentTimeMillis();
-
-        System.out.println("Solving completed in " + (endTime - startTime) / 1000.0 + " seconds");
+        // Solve with progress tracking
+        SlotSchedule solution = solveWithProgress(schedule);
 
         // Export output to CSV
         exportOutputToCSV(solution);
-
+        exportProgressLog();
         prettyPrintOutput(solution);
 
         if (!solution.getScore().isFeasible()) {
@@ -104,6 +101,117 @@ public class App {
         }
     }
 
+    /**
+     * Solves the problem using SolverManager with real-time progress tracking.
+     */
+    private static SlotSchedule solveWithProgress(SlotSchedule schedule) {
+        SolverConfig solverConfig = SolverConfigFactory.createConfig();
+        SolverFactory<SlotSchedule> solverFactory = SolverFactory.create(solverConfig);
+        SolverManager<SlotSchedule, Long> solverManager = SolverManager.create(solverFactory);
+
+        System.out.println("Starting optimization with progress tracking...");
+        System.out.println("Orders: " + schedule.getOrderList().size() + ", Shift buckets: " + schedule.getShiftList().size());
+        
+        progressTracker.startTracking();
+        long startTime = System.currentTimeMillis();
+
+        // Use a problem ID for tracking
+        Long problemId = 1L;
+        
+        // Solve asynchronously with progress tracking
+        var solvingJob = solverManager.solve(problemId, schedule, AppWithProgress::handleBestSolution);
+
+        try {
+            // Wait for completion
+            SlotSchedule finalSolution = solvingJob.getFinalBestSolution();
+            long endTime = System.currentTimeMillis();
+            double totalSeconds = (endTime - startTime) / 1000.0;
+            
+            progressTracker.finalReport(finalSolution, totalSeconds);
+            return finalSolution;
+            
+        } catch (Exception e) {
+            System.err.println("Error during solving: " + e.getMessage());
+            e.printStackTrace();
+            
+            // Return best solution found so far if available
+            SlotSchedule best = bestSolutionSoFar.get();
+            return best != null ? best : schedule;
+        } finally {
+            solverManager.close();
+        }
+    }
+
+    /**
+     * Handles each new best solution found during optimization.
+     * This method is called every time the solver finds a better solution.
+     */
+    private static void handleBestSolution(SlotSchedule solution) {
+        // Update the best solution reference
+        bestSolutionSoFar.set(solution);
+        
+        // Track progress
+        progressTracker.trackSolution(solution);
+        
+        // Log progress data for CSV export
+        long elapsedTime = System.currentTimeMillis();
+        long assignedOrders = solution.getOrderList().stream()
+                .filter(order -> order.getAssignedShift() != null)
+                .count();
+        double assignmentRate = (assignedOrders * 100.0) / solution.getOrderList().size();
+        
+        String logEntry = String.format(Locale.ROOT, "%d,%s,%d,%d,%.2f", 
+                elapsedTime, solution.getScore(), assignedOrders, 
+                solution.getOrderList().size(), assignmentRate);
+        progressLog.add(logEntry);
+        
+        // Optional: Export intermediate result every N solutions (uncomment if needed)
+        // if (progressLog.size() % 20 == 0) {
+        //     exportIntermediateResults(solution);
+        // }
+    }
+
+    /**
+     * Exports intermediate solution to files (optional feature).
+     */
+    @SuppressWarnings("unused")
+    private static void exportIntermediateResults(SlotSchedule solution) {
+        try {
+            String intermediateFile = CSV_OUTPUT_DIR + "/intermediate_solution_" + progressLog.size() + ".csv";
+            try (FileWriter writer = new FileWriter(intermediateFile)) {
+                writer.write("order_id,assigned_shift_id,assigned_rider_id,assigned_date\n");
+                for (Order order : solution.getOrderList()) {
+                    String assignedShift = order.getAssignedShift() != null ? order.getAssignedShift().getId() : "UNASSIGNED";
+                    String assignedRider = order.getAssignedShift() != null ? order.getAssignedShift().getRiderId() : "UNASSIGNED";
+                    String assignedDate = order.getAssignedShift() != null ? order.getAssignedShift().getDate().toString() : "UNASSIGNED";
+                    writer.write(String.format("%s,%s,%s,%s\n",
+                            csvEscape(order.getId()), csvEscape(assignedShift), 
+                            csvEscape(assignedRider), csvEscape(assignedDate)));
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Error exporting intermediate result: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Exports the progress log to CSV for analysis.
+     */
+    private static void exportProgressLog() {
+        try (FileWriter writer = new FileWriter(FILE_PROGRESS_LOG)) {
+            writer.write("timestamp,score,assigned_orders,total_orders,assignment_rate_percent\n");
+            for (String entry : progressLog) {
+                writer.write(entry + "\n");
+            }
+            System.out.println("Progress log exported to: " + FILE_PROGRESS_LOG);
+        } catch (IOException e) {
+            System.err.println("Error exporting progress log: " + e.getMessage());
+        }
+    }
+
+    // === REMAINING METHODS FROM ORIGINAL APP ===
+    // [Keep all the original methods for problem generation, CSV export, etc.]
+
     private static SlotSchedule generateSampleProblem() {
         // Depot per rider: center around city, then jitter per rider
         double baseDepotLat = 12.9716;
@@ -111,10 +219,10 @@ public class App {
 
         LocalDate base = LocalDate.now().withMonth(8).withDayOfMonth(3); // Aug 3
         int days = 5;
-        int ridersPerDay = 200; // Increased for 5000 orders
+        int ridersPerDay = 20; // Increased for 5000 orders
         int capacityPerRiderPerDay = 30; // Further increased capacity per rider/day
         double movableThreshold = 0.8; // 80% movable per rider/day  
-        int orderCount = 5000;
+        int orderCount = 500;
 
         Random random = new Random(123);
 
@@ -199,7 +307,6 @@ public class App {
     }
 
     private static void prettyPrintInput(SlotSchedule schedule) {
-        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
         System.out.println("=== INPUT ===");
         System.out.println("Orders: " + schedule.getOrderList().size());
         // Orders grouped by earliest day and window size
@@ -208,43 +315,10 @@ public class App {
                 .collect(Collectors.groupingBy(o -> o.getEarliestAllowedDay() + "|days=" + o.getAllowedDays().size(),
                         TreeMap::new, Collectors.toList()));
         byWindow.forEach((k, list) -> System.out.println("Window " + k + " -> count=" + list.size()));
-
-        // printSampleOrders(schedule, df);
-        // printDayWiseInput(schedule, df);
-
         System.out.println("=== END INPUT ===\n");
     }
 
-    private static void printDayWiseInput(SlotSchedule schedule, DateTimeFormatter df) {
-        // Shifts grouped by day
-        Map<String, List<ShiftBucket>> byDay = schedule.getShiftList().stream()
-                .sorted(Comparator.comparing(ShiftBucket::getId))
-                .collect(Collectors.groupingBy(s -> df.format(s.getDate()), LinkedHashMap::new, Collectors.toList()));
-        byDay.forEach((day, list) -> {
-            System.out.println("\nDay " + day + " riders=" + list.size());
-            list.stream().limit(5).forEach(s -> System.out.printf("  %s rider=%s cap=%d/%d lat=%.5f lon=%.5f skills=%s maxW=%.0f maxV=%.1f%n",
-                    s.getId(), s.getRiderId(), s.getEffectiveCapacity(), s.getCapacity(),
-                    s.getStartLatitude(), s.getStartLongitude(),
-                    s.getRiderSkills().isEmpty() ? "none" : String.join(",", s.getRiderSkills()),
-                    s.getMaxWeight(), s.getMaxVolume()));
-        });
-    }
-
-    private static void printSampleOrders(SlotSchedule schedule, DateTimeFormatter df) {
-        // Print a small sample of first 20 orders
-        System.out.println("\nSample orders (first 20):");
-        schedule.getOrderList().stream()
-                .sorted(Comparator.comparing(Order::getId))
-                .limit(20)
-                .forEach(o -> System.out.printf("%s allowed=%s lat=%.5f lon=%.5f time=%s-%s weight=%.1f skills=%s%n",
-                        o.getId(), o.getAllowedDays().stream().sorted().map(df::format).collect(Collectors.joining(",")),
-                        o.getLatitude(), o.getLongitude(),
-                        o.getPreferredStartTime(), o.getPreferredEndTime(), o.getWeight(),
-                        o.getRequiredSkills().isEmpty() ? "none" : String.join(",", o.getRequiredSkills())));
-    }
-
     private static void prettyPrintOutput(SlotSchedule solution) {
-        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
         System.out.println("\n=== OUTPUT ===");
         HardSoftScore score = solution.getScore();
         System.out.println("Score: " + score);
@@ -253,6 +327,7 @@ public class App {
                 .collect(Collectors.groupingBy(o -> o.getAssignedShift() == null ? "UNASSIGNED" : o.getAssignedShift().getId()));
 
         // Group shift summaries by day then rider
+        DateTimeFormatter df = DateTimeFormatter.ISO_DATE;
         Map<String, List<ShiftBucket>> dayToShifts = solution.getShiftList().stream()
                 .sorted(Comparator.comparing(ShiftBucket::getId))
                 .collect(Collectors.groupingBy(s -> df.format(s.getDate()), LinkedHashMap::new, Collectors.toList()));
@@ -275,36 +350,11 @@ public class App {
             System.out.printf("  day %d (%s): %d orders across %d riders%n", i + 1, day, totalAssigned, ridersUsed);
         }
 
-        // printDayLevelOutput(dayToShifts, byShift);
-
         var unassigned = byShift.getOrDefault("UNASSIGNED", List.of());
         if (!unassigned.isEmpty()) {
             System.out.println("\nUNASSIGNED (" + unassigned.size() + "): " + unassigned.stream().map(Order::getId).sorted().limit(50).collect(Collectors.joining(", ")) + (unassigned.size() > 50 ? " ..." : ""));
         }
         System.out.println("=== END OUTPUT ===");
-    }
-
-    private static void printDayLevelOutput(Map<String, List<ShiftBucket>> dayToShifts, Map<String, List<Order>> byShift) {
-
-        dayToShifts.forEach((day, shifts) -> {
-            System.out.println("\nDay " + day + ":");
-            for (ShiftBucket s : shifts) {
-                var assigned = byShift.getOrDefault(s.getId(), List.of());
-                long movableCount = assigned.stream().filter(Order::isMovable).count();
-                int movableLimit = (int) Math.floor(s.getMovableOccupationRatioThreshold() * s.getCapacity());
-                double totalWeight = assigned.stream().mapToDouble(Order::getWeight).sum();
-                double totalVolume = assigned.stream().mapToDouble(Order::getVolume).sum();
-                System.out.printf("  %s rider=%s cap=%d/%d assigned=%d movable=%d/%d weight=%.1f/%.0f vol=%.1f/%.1f%n",
-                        s.getId(), s.getRiderId(), s.getEffectiveCapacity(), s.getCapacity(),
-                        assigned.size(), movableCount, movableLimit, totalWeight, s.getMaxWeight(),
-                        totalVolume, s.getMaxVolume());
-                // Print first few assigned orders
-                var preview = assigned.stream().limit(10).map(Order::getId).collect(Collectors.joining(", "));
-                if (!preview.isEmpty()) {
-                    System.out.println("    orders: " + preview + (assigned.size() > 10 ? " ..." : ""));
-                }
-            }
-        });
     }
 
     private static void exportInputToCSV(SlotSchedule schedule) {
