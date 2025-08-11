@@ -243,7 +243,7 @@ function visualizeOutput(dayFilter) {
         
         // Calculate utilization
         const utilization = (riderData.orders.length / parseInt(riderInfo.effective_capacity)) * 100;
-        const utilizationColor = getUtilizationColor(utilization);
+        const riderColor = getRiderColor(riderData.riderId);
         
         // Create layer group for this rider
         const riderLayerGroup = L.layerGroup();
@@ -253,7 +253,7 @@ function visualizeOutput(dayFilter) {
             icon: L.divIcon({
                 className: 'rider-marker',
                 html: `<div style="
-                    background: ${utilizationColor};
+                    background: ${riderColor};
                     width: 20px;
                     height: 20px;
                     border-radius: 50%;
@@ -283,7 +283,7 @@ function visualizeOutput(dayFilter) {
             
             const orderMarker = L.circleMarker([lat, lng], {
                 radius: 4,
-                fillColor: utilizationColor,
+                fillColor: riderColor,
                 color: 'white',
                 weight: 1,
                 opacity: 1,
@@ -299,7 +299,7 @@ function visualizeOutput(dayFilter) {
                 [riderLat, riderLng],
                 [lat, lng]
             ], {
-                color: utilizationColor,
+                color: riderColor,
                 weight: 2,
                 opacity: 0.6,
                 dashArray: '5,5'
@@ -706,16 +706,16 @@ function updateLegend(viewType) {
     } else {
         content.innerHTML = `
             <div class="legend-item">
-                <div class="legend-color" style="background: ${COLORS.utilization.low}"></div>
-                <span>Low utilization (&lt;60%)</span>
+                <div class="legend-color" style="background: ${COLORS.riders[0]}"></div>
+                <span>Rider 1 (R1)</span>
             </div>
             <div class="legend-item">
-                <div class="legend-color" style="background: ${COLORS.utilization.medium}"></div>
-                <span>Medium utilization (60-85%)</span>
+                <div class="legend-color" style="background: ${COLORS.riders[1]}"></div>
+                <span>Rider 2 (R2)</span>
             </div>
             <div class="legend-item">
-                <div class="legend-color" style="background: ${COLORS.utilization.high}"></div>
-                <span>High utilization (&gt;85%)</span>
+                <div class="legend-color" style="background: ${COLORS.riders[2]}"></div>
+                <span>Rider 3 (R3)...</span>
             </div>
             <div class="legend-item">
                 <div style="width: 16px; height: 2px; background: #667eea; margin-right: 0.5rem; margin-top: 7px; opacity: 0.6;"></div>
@@ -1092,6 +1092,16 @@ Math.toRadians = function(degrees) {
     return degrees * (Math.PI / 180);
 };
 
+// Function to get consistent color for each rider
+function getRiderColor(riderId) {
+    // Extract numeric part from riderId (e.g., "R1" -> 1)
+    const riderNumber = parseInt(riderId.replace(/\D/g, '')) || 1;
+    
+    // Use modulo to cycle through available colors
+    const colorIndex = (riderNumber - 1) % COLORS.riders.length;
+    return COLORS.riders[colorIndex];
+}
+
 function toggleClusters() {
     const toggle = document.getElementById('showClustersToggle');
     showClusters = toggle.checked;
@@ -1149,14 +1159,14 @@ function createClusterPolygon(riderKey, riderData) {
     const hull = calculateConvexHull(points);
     
     if (hull && hull.length >= 3) {
-        // Create polygon
-        const utilizationColor = getUtilizationColor(riderData.utilization);
+        // Create polygon with rider-specific color
+        const riderColor = getRiderColor(riderData.data.riderId);
         const polygon = L.polygon(hull, {
-            color: utilizationColor,
+            color: riderColor,
             weight: 2,
             opacity: 0.7,
-            fillColor: utilizationColor,
-            fillOpacity: 0.15,
+            fillColor: riderColor,
+            fillOpacity: 0.35,
             dashArray: '5,5'
         });
         
@@ -1253,10 +1263,8 @@ function updateClusterVisibility() {
             if (!clusterPolygonsLayer.hasLayer(polygon)) {
                 clusterPolygonsLayer.addLayer(polygon);
             }
-        } else {
-            if (clusterPolygonsLayer.hasLayer(polygon)) {
+        } else if (clusterPolygonsLayer.hasLayer(polygon)) {
                 clusterPolygonsLayer.removeLayer(polygon);
             }
-        }
     });
 }

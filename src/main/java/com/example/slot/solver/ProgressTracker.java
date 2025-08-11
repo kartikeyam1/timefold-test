@@ -13,13 +13,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * Reports intermediate solutions and performance metrics.
  */
 public class ProgressTracker {
-    
+
     private final AtomicInteger solutionCount = new AtomicInteger(0);
     private final AtomicLong startTime = new AtomicLong();
     private final AtomicLong lastUpdateTime = new AtomicLong();
     private HardSoftScore bestScore = null;
     private final DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
-    
+
     public void startTracking() {
         long now = System.currentTimeMillis();
         startTime.set(now);
@@ -30,17 +30,17 @@ public class ProgressTracker {
         System.out.println("📊 Format: [Time] Solution #X | Score: Y | Elapsed: Z seconds | Improvement: ΔY");
         System.out.println("─".repeat(80));
     }
-    
+
     public void trackSolution(SlotSchedule solution) {
         long now = System.currentTimeMillis();
         int count = solutionCount.incrementAndGet();
         HardSoftScore currentScore = solution.getScore();
-        
+
         double elapsedSeconds = (now - startTime.get()) / 1000.0;
         String timeStr = LocalDateTime.now().format(timeFormatter);
-        
+
         // Calculate improvement
-        String improvement = "";
+        String improvement;
         if (bestScore != null) {
             HardSoftScore delta = currentScore.subtract(bestScore);
             if (delta.compareTo(HardSoftScore.ZERO) > 0) {
@@ -53,63 +53,40 @@ public class ProgressTracker {
         } else {
             improvement = " 🎯 (first solution)";
         }
-        
+
         // Update best score
         if (bestScore == null || currentScore.compareTo(bestScore) > 0) {
             bestScore = currentScore;
         }
-        
+
         // Print progress report
-        System.out.printf("[%s] Solution #%-3d | Score: %-20s | Elapsed: %6.1fs%s%n", 
+        System.out.printf("[%s] Solution #%-3d | Score: %-20s | Elapsed: %6.1fs%s%n",
                 timeStr, count, currentScore, elapsedSeconds, improvement);
-        
+
         // Print summary statistics every 10 solutions
         if (count % 10 == 0) {
             printDetailedProgress(solution, elapsedSeconds, count);
         }
-        
+
         lastUpdateTime.set(now);
     }
-    
+
     private void printDetailedProgress(SlotSchedule solution, double elapsedSeconds, int solutionCount) {
         long assignedOrders = solution.getOrderList().stream()
                 .filter(order -> order.getAssignedShift() != null)
                 .count();
         long unassignedOrders = solution.getOrderList().size() - assignedOrders;
-        
+
         double assignmentRate = (assignedOrders * 100.0) / solution.getOrderList().size();
         double solutionsPerSecond = solutionCount / elapsedSeconds;
-        
+
         System.out.println("  📈 Progress Summary:");
-        System.out.printf("     • Assigned: %d/%d orders (%.1f%%)%n", 
+        System.out.printf("     • Assigned: %d/%d orders (%.1f%%)%n",
                 assignedOrders, solution.getOrderList().size(), assignmentRate);
         System.out.printf("     • Unassigned: %d orders%n", unassignedOrders);
         System.out.printf("     • Solutions/sec: %.1f%n", solutionsPerSecond);
         System.out.printf("     • Best score so far: %s%n", bestScore);
         System.out.println("  ─".repeat(40));
     }
-    
-    public void finalReport(SlotSchedule finalSolution, double totalSeconds) {
-        System.out.println("─".repeat(80));
-        System.out.println("🏁 OPTIMIZATION COMPLETED");
-        System.out.printf("⏱️  Total time: %.2f seconds%n", totalSeconds);
-        System.out.printf("🔄 Total solutions evaluated: %d%n", solutionCount.get());
-        System.out.printf("📊 Final score: %s%n", finalSolution.getScore());
-        System.out.printf("⚡ Average solutions per second: %.1f%n", solutionCount.get() / totalSeconds);
-        
-        long assignedOrders = finalSolution.getOrderList().stream()
-                .filter(order -> order.getAssignedShift() != null)
-                .count();
-        double assignmentRate = (assignedOrders * 100.0) / finalSolution.getOrderList().size();
-        
-        System.out.printf("🎯 Final assignment rate: %d/%d orders (%.1f%%)%n", 
-                assignedOrders, finalSolution.getOrderList().size(), assignmentRate);
-        
-        if (finalSolution.getScore().isFeasible()) {
-            System.out.println("✅ Solution is feasible!");
-        } else {
-            System.out.println("❌ Solution is not feasible - consider adjusting constraints");
-        }
-        System.out.println("─".repeat(80));
-    }
+
 }
