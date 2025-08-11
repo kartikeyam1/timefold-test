@@ -1,6 +1,7 @@
 // Global variables
 let map;
 let markersLayer;
+let clusterPolygonsLayer; // Layer for cluster polygons
 let currentData = {
     orders: [],
     riders: [],
@@ -11,6 +12,8 @@ let currentData = {
 let charts = {};
 let riderVisibility = {}; // Track which riders are visible
 let riderMarkers = {}; // Store rider markers for easy access
+let clusterPolygons = {}; // Store cluster polygons for each rider
+let showClusters = false; // Toggle for cluster visibility
 
 // Color schemes for different data types
 const COLORS = {
@@ -46,8 +49,9 @@ function initMap() {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
     
-    // Create markers layer
+    // Create layers
     markersLayer = L.layerGroup().addTo(map);
+    clusterPolygonsLayer = L.layerGroup().addTo(map);
 }
 
 function bindEvents() {
@@ -56,6 +60,7 @@ function bindEvents() {
     document.getElementById('viewSelect').addEventListener('change', refreshVisualization);
     document.getElementById('dayFilter').addEventListener('change', refreshVisualization);
     document.getElementById('versionSelect').addEventListener('change', updateFilePathInfo);
+    document.getElementById('showClustersToggle').addEventListener('change', toggleClusters);
 }
 
 function updateFilePathInfo() {
@@ -125,14 +130,21 @@ function refreshVisualization() {
     const viewType = document.getElementById('viewSelect').value;
     const dayFilter = document.getElementById('dayFilter').value;
     
-    // Clear existing markers
+    // Clear existing markers and clusters
     markersLayer.clearLayers();
+    clusterPolygonsLayer.clearLayers();
     riderMarkers = {}; // Reset rider markers
+    clusterPolygons = {}; // Reset cluster polygons
     
     if (viewType === 'input') {
         visualizeInput(dayFilter);
     } else {
         visualizeOutput(dayFilter);
+        
+        // Generate clusters if enabled
+        if (showClusters) {
+            generateAndDisplayClusters();
+        }
     }
     
     updateStatistics(viewType, dayFilter);
@@ -709,6 +721,12 @@ function updateLegend(viewType) {
                 <div style="width: 16px; height: 2px; background: #667eea; margin-right: 0.5rem; margin-top: 7px; opacity: 0.6;"></div>
                 <span>Rider-Order connections</span>
             </div>
+            ${showClusters ? `
+            <div class="legend-item">
+                <div style="width: 16px; height: 16px; border: 2px dashed #667eea; margin-right: 0.5rem; opacity: 0.7; background: rgba(102, 126, 234, 0.15);"></div>
+                <span>Cluster polygons</span>
+            </div>
+            ` : ''}
         `;
     }
     
@@ -969,6 +987,9 @@ function toggleRider(riderKey) {
         }
     }
     
+    // Update cluster visibility
+    updateClusterVisibility();
+    
     // Update the toggle button appearance
     const toggleBtn = document.querySelector(`[onclick="toggleRider('${riderKey}')"]`);
     if (toggleBtn) {
@@ -992,6 +1013,9 @@ function toggleAllRiders(show) {
             }
         }
     });
+    
+    // Update cluster visibility
+    updateClusterVisibility();
     
     // Update all toggle buttons
     document.querySelectorAll('.rider-toggle').forEach(btn => {
@@ -1017,6 +1041,9 @@ function toggleHighUtilization() {
             }
         }
     });
+    
+    // Update cluster visibility
+    updateClusterVisibility();
     
     // Update all toggle buttons
     document.querySelectorAll('.rider-toggle').forEach((btn, index) => {
@@ -1054,4 +1081,182 @@ function updateRidersCount() {
     if (header) {
         header.textContent = `🚚 Riders (${visibleRiders}/${totalRiders})`;
     }
+}
+
+// ============================================================================
+// CLUSTER POLYGON FUNCTIONALITY
+// ============================================================================
+
+// Helper function for coordinate calculations
+Math.toRadians = function(degrees) {
+    return degrees * (Math.PI / 180);
+};
+
+function toggleClusters() {
+    const toggle = document.getElementById('showClustersToggle');
+    showClusters = toggle.checked;
+    
+    if (showClusters) {
+        generateAndDisplayClusters();
+    } else {
+        hideClusters();
+    }
+}
+
+function generateAndDisplayClusters() {
+    if (Object.keys(riderMarkers).length === 0) return;
+    
+    // Clear existing cluster polygons
+    clusterPolygonsLayer.clearLayers();
+    clusterPolygons = {};
+    
+    // Generate cluster polygons for each visible rider
+    Object.keys(riderMarkers).forEach(riderKey => {
+        if (riderVisibility[riderKey]) {
+            const riderData = riderMarkers[riderKey];
+            createClusterPolygon(riderKey, riderData);
+        }
+    });
+}
+
+function createClusterPolygon(riderKey, riderData) {
+    const orders = riderData.data.orders;
+    const riderInfo = riderData.info;
+    
+    if (orders.length < 3) {
+        // Need at least 3 points for a meaningful polygon
+        return;
+    }
+    
+    // Collect all order coordinates + rider depot
+    const points = [];
+    
+    // Add rider depot
+    points.push([riderInfo.latitude, riderInfo.longitude]);
+    
+    // Add order locations
+    orders.forEach(order => {
+        const lat = parseFloat(order.latitude);
+        const lng = parseFloat(order.longitude);
+        if (!isNaN(lat) && !isNaN(lng)) {
+            points.push([lat, lng]);
+        }
+    });
+    
+    if (points.length < 3) return;
+    
+    // Calculate convex hull
+    const hull = calculateConvexHull(points);
+    
+    if (hull && hull.length >= 3) {
+        // Create polygon
+        const utilizationColor = getUtilizationColor(riderData.utilization);
+        const polygon = L.polygon(hull, {
+            color: utilizationColor,
+            weight: 2,
+            opacity: 0.7,
+            fillColor: utilizationColor,
+            fillOpacity: 0.15,
+            dashArray: '5,5'
+        });
+        
+        // Add popup with cluster info
+        const clusterInfo = createClusterPopup(riderData);
+        polygon.bindPopup(clusterInfo);
+        
+        // Store and add to map
+        clusterPolygons[riderKey] = polygon;
+        clusterPolygonsLayer.addLayer(polygon);
+    }
+}
+
+function calculateConvexHull(points) {
+    try {
+        // Convert [lat, lng] to [lng, lat] for d3.polygonHull (expects x, y format)
+        const d3Points = points.map(point => [point[1], point[0]]);
+        
+        // Calculate convex hull using d3-polygon
+        const hull = d3.polygonHull(d3Points);
+        
+        if (!hull) return null;
+        
+        // Convert back to [lat, lng] for Leaflet
+        return hull.map(point => [point[1], point[0]]);
+    } catch (error) {
+        console.warn('Error calculating convex hull:', error);
+        return null;
+    }
+}
+
+function createClusterPopup(riderData) {
+    const orders = riderData.data.orders;
+    const riderInfo = riderData.info;
+    
+    // Calculate cluster statistics
+    const totalOrders = orders.length;
+    const totalWeight = orders.reduce((sum, order) => sum + parseFloat(order.weight || 0), 0);
+    const totalVolume = orders.reduce((sum, order) => sum + parseFloat(order.volume || 0), 0);
+    
+    // Calculate cluster area (approximate)
+    const lats = orders.map(o => parseFloat(o.latitude)).filter(lat => !isNaN(lat));
+    const lngs = orders.map(o => parseFloat(o.longitude)).filter(lng => !isNaN(lng));
+    lats.push(riderInfo.latitude);
+    lngs.push(riderInfo.longitude);
+    
+    const latRange = Math.max(...lats) - Math.min(...lats);
+    const lngRange = Math.max(...lngs) - Math.min(...lngs);
+    const approxArea = (latRange * 111) * (lngRange * 111 * Math.cos(Math.toRadians(riderInfo.latitude)));
+    
+    return `
+        <div class="tooltip">
+            <h4>📍 Cluster: Rider ${riderData.data.riderId}</h4>
+            <div class="tooltip-row">
+                <span>Date:</span>
+                <span>${riderData.data.date}</span>
+            </div>
+            <div class="tooltip-row">
+                <span>Orders in Cluster:</span>
+                <span>${totalOrders}</span>
+            </div>
+            <div class="tooltip-row">
+                <span>Total Weight:</span>
+                <span>${totalWeight.toFixed(1)} kg</span>
+            </div>
+            <div class="tooltip-row">
+                <span>Total Volume:</span>
+                <span>${totalVolume.toFixed(2)} m³</span>
+            </div>
+            <div class="tooltip-row">
+                <span>Approx. Area:</span>
+                <span>${approxArea.toFixed(1)} km²</span>
+            </div>
+            <div class="tooltip-row">
+                <span>Utilization:</span>
+                <span>${riderData.utilization.toFixed(1)}%</span>
+            </div>
+        </div>
+    `;
+}
+
+function hideClusters() {
+    clusterPolygonsLayer.clearLayers();
+    clusterPolygons = {};
+}
+
+// Update cluster visibility when rider visibility changes
+function updateClusterVisibility() {
+    if (!showClusters) return;
+    
+    Object.keys(clusterPolygons).forEach(riderKey => {
+        const polygon = clusterPolygons[riderKey];
+        if (riderVisibility[riderKey]) {
+            if (!clusterPolygonsLayer.hasLayer(polygon)) {
+                clusterPolygonsLayer.addLayer(polygon);
+            }
+        } else {
+            if (clusterPolygonsLayer.hasLayer(polygon)) {
+                clusterPolygonsLayer.removeLayer(polygon);
+            }
+        }
+    });
 }
