@@ -33,14 +33,15 @@ import java.util.stream.Collectors;
 public class App {
 
     // Configuration for CSV output
-    private static final String CSV_OUTPUT_DIR = "csv_output";
-    private static final String FILE_SUFFIX = "_v1"; // Change this suffix as needed
+    private static final String CSV_BASE_DIR = "csv_output";
+    private static final String RUN_VERSION = "v1"; // Change this version as needed (e.g., v1, v2, prod, test)
+    private static final String CSV_OUTPUT_DIR = CSV_BASE_DIR + "/" + RUN_VERSION;
     
-    private static final String FILE_INPUT_ORDERS = CSV_OUTPUT_DIR + "/input_orders" + FILE_SUFFIX + ".csv";
-    private static final String FILE_INPUT_RIDERS = CSV_OUTPUT_DIR + "/input_riders" + FILE_SUFFIX + ".csv";
-    private static final String FILE_OUTPUT_ASSIGNMENTS = CSV_OUTPUT_DIR + "/output_assignments" + FILE_SUFFIX + ".csv";
-    private static final String FILE_OUTPUT_SHIFT_SUMMARY = CSV_OUTPUT_DIR + "/output_shift_summary" + FILE_SUFFIX + ".csv";
-    private static final String FILE_OUTPUT_DAILY_SUMMARY = CSV_OUTPUT_DIR + "/output_daily_summary" + FILE_SUFFIX + ".csv";
+    private static final String FILE_INPUT_ORDERS = CSV_OUTPUT_DIR + "/input_orders.csv";
+    private static final String FILE_INPUT_RIDERS = CSV_OUTPUT_DIR + "/input_riders.csv";
+    private static final String FILE_OUTPUT_ASSIGNMENTS = CSV_OUTPUT_DIR + "/output_assignments.csv";
+    private static final String FILE_OUTPUT_SHIFT_SUMMARY = CSV_OUTPUT_DIR + "/output_shift_summary.csv";
+    private static final String FILE_OUTPUT_DAILY_SUMMARY = CSV_OUTPUT_DIR + "/output_daily_summary.csv";
 
     private static String csvEscape(String s) {
         if (s == null) return "";
