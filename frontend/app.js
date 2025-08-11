@@ -9,6 +9,8 @@ let currentData = {
     shiftSummary: []
 };
 let charts = {};
+let riderVisibility = {}; // Track which riders are visible
+let riderMarkers = {}; // Store rider markers for easy access
 
 // Color schemes for different data types
 const COLORS = {
@@ -124,6 +126,7 @@ function refreshVisualization() {
     
     // Clear existing markers
     markersLayer.clearLayers();
+    riderMarkers = {}; // Reset rider markers
     
     if (viewType === 'input') {
         visualizeInput(dayFilter);
@@ -200,9 +203,18 @@ function visualizeOutput(dayFilter) {
         }
     });
     
+    // Initialize rider visibility if not set
+    Object.keys(assignmentsByRider).forEach(key => {
+        if (!(key in riderVisibility)) {
+            riderVisibility[key] = true; // Default to visible
+        }
+    });
+    
     // Visualize rider clusters
     Object.values(assignmentsByRider).forEach(riderData => {
         if (riderData.orders.length === 0) return;
+        
+        const riderKey = `${riderData.riderId}_${riderData.date}`;
         
         // Find rider info
         const riderInfo = currentData.riders.find(r => 
@@ -219,6 +231,9 @@ function visualizeOutput(dayFilter) {
         // Calculate utilization
         const utilization = (riderData.orders.length / parseInt(riderInfo.effective_capacity)) * 100;
         const utilizationColor = getUtilizationColor(utilization);
+        
+        // Create layer group for this rider
+        const riderLayerGroup = L.layerGroup();
         
         // Create rider marker (depot)
         const riderMarker = L.marker([riderLat, riderLng], {
@@ -244,7 +259,7 @@ function visualizeOutput(dayFilter) {
         
         const riderPopup = createRiderPopup(riderData, riderInfo, utilization);
         riderMarker.bindPopup(riderPopup);
-        markersLayer.addLayer(riderMarker);
+        riderLayerGroup.addLayer(riderMarker);
         
         // Add order markers for this rider
         riderData.orders.forEach(order => {
@@ -264,7 +279,7 @@ function visualizeOutput(dayFilter) {
             
             const orderPopup = createAssignedOrderPopup(order, riderData.riderId);
             orderMarker.bindPopup(orderPopup);
-            markersLayer.addLayer(orderMarker);
+            riderLayerGroup.addLayer(orderMarker);
             
             // Draw line from rider to order
             const line = L.polyline([
@@ -277,8 +292,20 @@ function visualizeOutput(dayFilter) {
                 dashArray: '5,5'
             });
             
-            markersLayer.addLayer(line);
+            riderLayerGroup.addLayer(line);
         });
+        
+        // Store rider layer group and add to map if visible
+        riderMarkers[riderKey] = {
+            layerGroup: riderLayerGroup,
+            data: riderData,
+            info: riderInfo,
+            utilization: utilization
+        };
+        
+        if (riderVisibility[riderKey]) {
+            markersLayer.addLayer(riderLayerGroup);
+        }
     });
 }
 
@@ -523,6 +550,8 @@ function showOutputStatistics(container, dayFilter) {
             </div>
         </div>
         
+        ${createRidersPanel(dayFilter)}
+        
         <div class="stats-card">
             <h3>📊 Daily Summary</h3>
             <div class="chart-container">
@@ -537,6 +566,9 @@ function showOutputStatistics(container, dayFilter) {
             </div>
         </div>
     `;
+    
+    // Bind events for rider toggles
+    bindRiderToggleEvents();
     
     createDailySummaryChart();
     createUtilizationChart(riderStats);
@@ -688,4 +720,174 @@ function showLoading() {
 
 function showError(message) {
     document.getElementById('statsContainer').innerHTML = `<div class="error">${message}</div>`;
+}
+
+// Rider Management Functions
+function createRidersPanel(dayFilter) {
+    const ridersData = Object.values(riderMarkers);
+    
+    if (ridersData.length === 0) {
+        return '<div class="stats-card"><h3>🚚 No Riders Available</h3></div>';
+    }
+    
+    // Sort riders by utilization (highest first)
+    ridersData.sort((a, b) => b.utilization - a.utilization);
+    
+    const visibleCount = ridersData.filter(r => riderVisibility[`${r.data.riderId}_${r.data.date}`]).length;
+    
+    let ridersHtml = `
+        <div class="riders-panel">
+            <div class="riders-header" onclick="toggleRidersPanel()">
+                <span>🚚 Riders (${visibleCount}/${ridersData.length})</span>
+                <span class="collapse-icon" id="ridersCollapseIcon">▼</span>
+            </div>
+            <div class="riders-content" id="ridersContent">
+    `;
+    
+    ridersData.forEach(rider => {
+        const riderKey = `${rider.data.riderId}_${rider.data.date}`;
+        const isVisible = riderVisibility[riderKey];
+        const utilizationColor = getUtilizationColor(rider.utilization);
+        
+        ridersHtml += `
+            <div class="rider-item">
+                <div class="rider-toggle ${isVisible ? 'active' : 'inactive'}" 
+                     onclick="toggleRider('${riderKey}')"
+                     title="Click to ${isVisible ? 'hide' : 'show'} rider">
+                    ${isVisible ? '👁' : '👁'}
+                </div>
+                <div class="rider-info">
+                    <div>
+                        <div class="rider-name">${rider.data.riderId}</div>
+                        <div class="rider-stats">${rider.data.date}</div>
+                        <div class="rider-utilization">
+                            <div class="rider-utilization-bar" 
+                                 style="width: ${Math.min(rider.utilization, 100)}%; background: ${utilizationColor}">
+                            </div>
+                        </div>
+                    </div>
+                    <div style="text-align: right; font-size: 0.75rem;">
+                        <div>${rider.data.orders.length}/${rider.info.effective_capacity}</div>
+                        <div style="color: ${utilizationColor}; font-weight: bold;">
+                            ${rider.utilization.toFixed(0)}%
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    ridersHtml += `
+            </div>
+            <div class="bulk-actions">
+                <button class="bulk-btn" onclick="toggleAllRiders(true)">Show All</button>
+                <button class="bulk-btn" onclick="toggleAllRiders(false)">Hide All</button>
+                <button class="bulk-btn" onclick="toggleHighUtilization()">High Only</button>
+            </div>
+        </div>
+    `;
+    
+    return ridersHtml;
+}
+
+function bindRiderToggleEvents() {
+    // Events are bound via onclick in the HTML, no additional binding needed
+}
+
+function toggleRider(riderKey) {
+    riderVisibility[riderKey] = !riderVisibility[riderKey];
+    
+    if (riderMarkers[riderKey]) {
+        if (riderVisibility[riderKey]) {
+            markersLayer.addLayer(riderMarkers[riderKey].layerGroup);
+        } else {
+            markersLayer.removeLayer(riderMarkers[riderKey].layerGroup);
+        }
+    }
+    
+    // Update the toggle button appearance
+    const toggleBtn = document.querySelector(`[onclick="toggleRider('${riderKey}')"]`);
+    if (toggleBtn) {
+        toggleBtn.className = `rider-toggle ${riderVisibility[riderKey] ? 'active' : 'inactive'}`;
+        toggleBtn.title = `Click to ${riderVisibility[riderKey] ? 'hide' : 'show'} rider`;
+    }
+    
+    // Update the riders count in header
+    updateRidersCount();
+}
+
+function toggleAllRiders(show) {
+    Object.keys(riderMarkers).forEach(riderKey => {
+        riderVisibility[riderKey] = show;
+        
+        if (riderMarkers[riderKey]) {
+            if (show) {
+                markersLayer.addLayer(riderMarkers[riderKey].layerGroup);
+            } else {
+                markersLayer.removeLayer(riderMarkers[riderKey].layerGroup);
+            }
+        }
+    });
+    
+    // Update all toggle buttons
+    document.querySelectorAll('.rider-toggle').forEach(btn => {
+        btn.className = `rider-toggle ${show ? 'active' : 'inactive'}`;
+        btn.title = `Click to ${show ? 'hide' : 'show'} rider`;
+    });
+    
+    updateRidersCount();
+}
+
+function toggleHighUtilization() {
+    Object.keys(riderMarkers).forEach(riderKey => {
+        const rider = riderMarkers[riderKey];
+        const showHighUtil = rider.utilization >= 70; // Show riders with 70%+ utilization
+        
+        riderVisibility[riderKey] = showHighUtil;
+        
+        if (rider) {
+            if (showHighUtil) {
+                markersLayer.addLayer(rider.layerGroup);
+            } else {
+                markersLayer.removeLayer(rider.layerGroup);
+            }
+        }
+    });
+    
+    // Update all toggle buttons
+    document.querySelectorAll('.rider-toggle').forEach((btn, index) => {
+        const riderKey = Object.keys(riderMarkers)[index];
+        if (riderKey) {
+            const isVisible = riderVisibility[riderKey];
+            btn.className = `rider-toggle ${isVisible ? 'active' : 'inactive'}`;
+            btn.title = `Click to ${isVisible ? 'hide' : 'show'} rider`;
+        }
+    });
+    
+    updateRidersCount();
+}
+
+function toggleRidersPanel() {
+    const content = document.getElementById('ridersContent');
+    const icon = document.getElementById('ridersCollapseIcon');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.textContent = '▼';
+        icon.classList.remove('collapsed');
+    } else {
+        content.style.display = 'none';
+        icon.textContent = '▶';
+        icon.classList.add('collapsed');
+    }
+}
+
+function updateRidersCount() {
+    const totalRiders = Object.keys(riderMarkers).length;
+    const visibleRiders = Object.keys(riderMarkers).filter(key => riderVisibility[key]).length;
+    
+    const header = document.querySelector('.riders-header span');
+    if (header) {
+        header.textContent = `🚚 Riders (${visibleRiders}/${totalRiders})`;
+    }
 }

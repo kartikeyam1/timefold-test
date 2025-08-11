@@ -35,13 +35,13 @@ import java.util.stream.Collectors;
  * Enhanced App with real-time progress tracking during optimization.
  * Uses SolverManager to monitor intermediate solutions.
  */
-public class AppWithProgress {
+public class App {
 
     // Configuration for CSV output
     private static final String CSV_BASE_DIR = "csv_output";
     private static final String RUN_VERSION = "v2"; // Different version for progress-enabled runs
     private static final String CSV_OUTPUT_DIR = CSV_BASE_DIR + "/" + RUN_VERSION;
-    
+
     private static final String FILE_INPUT_ORDERS = CSV_OUTPUT_DIR + "/input_orders.csv";
     private static final String FILE_INPUT_RIDERS = CSV_OUTPUT_DIR + "/input_riders.csv";
     private static final String FILE_OUTPUT_ASSIGNMENTS = CSV_OUTPUT_DIR + "/output_assignments.csv";
@@ -105,35 +105,36 @@ public class AppWithProgress {
      * Solves the problem using SolverManager with real-time progress tracking.
      */
     private static SlotSchedule solveWithProgress(SlotSchedule schedule) {
+
         SolverConfig solverConfig = SolverConfigFactory.createConfig();
         SolverFactory<SlotSchedule> solverFactory = SolverFactory.create(solverConfig);
         SolverManager<SlotSchedule, Long> solverManager = SolverManager.create(solverFactory);
 
         System.out.println("Starting optimization with progress tracking...");
         System.out.println("Orders: " + schedule.getOrderList().size() + ", Shift buckets: " + schedule.getShiftList().size());
-        
+
         progressTracker.startTracking();
         long startTime = System.currentTimeMillis();
 
         // Use a problem ID for tracking
         Long problemId = 1L;
-        
+
         // Solve asynchronously with progress tracking
-        var solvingJob = solverManager.solve(problemId, schedule, AppWithProgress::handleBestSolution);
+        var solvingJob = solverManager.solve(problemId, schedule, App::handleBestSolution);
 
         try {
             // Wait for completion
             SlotSchedule finalSolution = solvingJob.getFinalBestSolution();
             long endTime = System.currentTimeMillis();
             double totalSeconds = (endTime - startTime) / 1000.0;
-            
+
             progressTracker.finalReport(finalSolution, totalSeconds);
             return finalSolution;
-            
+
         } catch (Exception e) {
             System.err.println("Error during solving: " + e.getMessage());
             e.printStackTrace();
-            
+
             // Return best solution found so far if available
             SlotSchedule best = bestSolutionSoFar.get();
             return best != null ? best : schedule;
@@ -147,32 +148,33 @@ public class AppWithProgress {
      * This method is called every time the solver finds a better solution.
      */
     private static void handleBestSolution(SlotSchedule solution) {
+
         // Update the best solution reference
         bestSolutionSoFar.set(solution);
-        
+
         // Track progress
         progressTracker.trackSolution(solution);
-        
+
         // Log progress data for CSV export
         long elapsedTime = System.currentTimeMillis();
         long assignedOrders = solution.getOrderList().stream()
                 .filter(order -> order.getAssignedShift() != null)
                 .count();
         double assignmentRate = (assignedOrders * 100.0) / solution.getOrderList().size();
-        
-        String logEntry = String.format(Locale.ROOT, "%d,%s,%d,%d,%.2f", 
-                elapsedTime, solution.getScore(), assignedOrders, 
+
+        String logEntry = String.format(Locale.ROOT, "%d,%s,%d,%d,%.2f",
+                elapsedTime, solution.getScore(), assignedOrders,
                 solution.getOrderList().size(), assignmentRate);
         progressLog.add(logEntry);
-        
+
         // Optional: Export intermediate result every N solutions (uncomment if needed)
-        // if (progressLog.size() % 20 == 0) {
-        //     exportIntermediateResults(solution);
-        // }
+        if (progressLog.size() % 20 == 0) {
+            exportIntermediateResults(solution);
+        }
     }
 
     /**
-     * Exports intermediate solution to files (optional feature).
+     * Exports intermediate solution to files.
      */
     @SuppressWarnings("unused")
     private static void exportIntermediateResults(SlotSchedule solution) {
@@ -185,7 +187,7 @@ public class AppWithProgress {
                     String assignedRider = order.getAssignedShift() != null ? order.getAssignedShift().getRiderId() : "UNASSIGNED";
                     String assignedDate = order.getAssignedShift() != null ? order.getAssignedShift().getDate().toString() : "UNASSIGNED";
                     writer.write(String.format("%s,%s,%s,%s\n",
-                            csvEscape(order.getId()), csvEscape(assignedShift), 
+                            csvEscape(order.getId()), csvEscape(assignedShift),
                             csvEscape(assignedRider), csvEscape(assignedDate)));
                 }
             }
@@ -208,9 +210,6 @@ public class AppWithProgress {
             System.err.println("Error exporting progress log: " + e.getMessage());
         }
     }
-
-    // === REMAINING METHODS FROM ORIGINAL APP ===
-    // [Keep all the original methods for problem generation, CSV export, etc.]
 
     private static SlotSchedule generateSampleProblem() {
         // Depot per rider: center around city, then jitter per rider
