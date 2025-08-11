@@ -59,6 +59,12 @@ Thumbs.db
 *.csv
 csv_output/
 
+# Frontend - keep source files, ignore any generated assets
+!frontend/
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+
 # Temporary files
 *.tmp
 *.temp
