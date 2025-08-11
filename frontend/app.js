@@ -33,6 +33,7 @@ const COLORS = {
 document.addEventListener('DOMContentLoaded', function() {
     initMap();
     bindEvents();
+    loadAvailableVersions();
     updateFilePathInfo();
 });
 
@@ -720,6 +721,169 @@ function showLoading() {
 
 function showError(message) {
     document.getElementById('statsContainer').innerHTML = `<div class="error">${message}</div>`;
+}
+
+// Version Management Functions
+async function loadAvailableVersions() {
+    try {
+        showVersionLoading();
+        
+        // First try the API endpoint
+        try {
+            const response = await fetch('/api/versions');
+            if (response.ok) {
+                const data = await response.json();
+                if (data.versions && data.versions.length > 0) {
+                    populateVersionSelect(data.versions);
+                    console.log(`API detected ${data.count} versions:`, data.versions);
+                    return;
+                }
+            }
+        } catch (apiError) {
+            console.log('API endpoint not available, trying directory listing...');
+        }
+        
+        // Fallback: Try to get the directory listing from the server
+        try {
+            const response = await fetch('../csv_output/');
+            const text = await response.text();
+            
+            // Parse the HTML directory listing to extract folder names
+            const versions = parseDirectoryListing(text);
+            
+            if (versions.length > 0) {
+                populateVersionSelect(versions);
+                return;
+            }
+        } catch (dirError) {
+            console.log('Directory listing failed, trying probing method...');
+        }
+        
+        // Final fallback: try to detect versions by attempting to load known directories
+        await detectVersionsByProbing();
+        
+    } catch (error) {
+        console.warn('Could not auto-detect versions:', error);
+        // Keep default hardcoded versions as ultimate fallback
+        populateVersionSelect(['v1', 'v2', 'prod', 'test']);
+        console.log('Using fallback hardcoded versions');
+    } finally {
+        // Re-enable the select
+        const select = document.getElementById('versionSelect');
+        select.disabled = false;
+    }
+}
+
+function parseDirectoryListing(html) {
+    const versions = [];
+    
+    // Try multiple patterns to match directory links
+    const patterns = [
+        /<a[^>]*href="([^"]+)\/"[^>]*>([^<]+)<\/a>/gi,  // Standard Apache/Nginx style
+        /<a[^>]*>([^<]+)\/<\/a>/gi,                     // Simple directory links
+        /href="([^"\/]+)\/"[^>]*>([^<]*)/gi             // Alternative pattern
+    ];
+    
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(html)) !== null) {
+            const dirName = match[1] || match[2];
+            if (dirName && 
+                dirName !== '..' && 
+                dirName !== '.' && 
+                !dirName.includes('..') &&
+                !dirName.includes('index') &&
+                dirName.trim() !== '') {
+                
+                // Clean up the directory name
+                const cleanName = dirName.replace(/\//g, '').trim();
+                if (cleanName && !versions.includes(cleanName)) {
+                    versions.push(cleanName);
+                }
+            }
+        }
+    }
+    
+    return versions.sort();
+}
+
+async function detectVersionsByProbing() {
+    const commonVersions = ['v1', 'v2', 'v3', 'prod', 'test', 'dev', 'staging'];
+    const detectedVersions = [];
+    
+    for (const version of commonVersions) {
+        try {
+            const response = await fetch(`../csv_output/${version}/input_orders.csv`, { method: 'HEAD' });
+            if (response.ok) {
+                detectedVersions.push(version);
+            }
+        } catch (error) {
+            // Version doesn't exist, continue
+        }
+    }
+    
+    if (detectedVersions.length > 0) {
+        populateVersionSelect(detectedVersions);
+    }
+}
+
+function populateVersionSelect(versions) {
+    const select = document.getElementById('versionSelect');
+    const currentValue = select.value;
+    
+    // Clear existing options
+    select.innerHTML = '';
+    
+    // Add detected versions
+    versions.forEach(version => {
+        const option = document.createElement('option');
+        option.value = version;
+        option.textContent = version;
+        select.appendChild(option);
+    });
+    
+    // Try to restore previous selection, or select first available
+    if (versions.includes(currentValue)) {
+        select.value = currentValue;
+    } else if (versions.length > 0) {
+        select.value = versions[0];
+    }
+    
+    // Update info message
+    updateVersionInfo(versions);
+    
+    console.log(`Detected ${versions.length} versions:`, versions);
+}
+
+function updateVersionInfo(versions) {
+    // Remove any existing version info
+    const existingInfo = document.querySelector('.version-info');
+    if (existingInfo) {
+        existingInfo.remove();
+    }
+    
+    // Add info about detected versions
+    const controlsDiv = document.querySelector('.controls');
+    const infoDiv = document.createElement('div');
+    infoDiv.className = 'version-info';
+    infoDiv.style.cssText = 'font-size: 0.8rem; color: #6c757d; margin-left: auto;';
+    infoDiv.textContent = `${versions.length} version${versions.length !== 1 ? 's' : ''} detected`;
+    
+    controlsDiv.appendChild(infoDiv);
+}
+
+function showVersionLoading() {
+    const select = document.getElementById('versionSelect');
+    select.innerHTML = '<option>Loading versions...</option>';
+    select.disabled = true;
+}
+
+// Enhanced version selector with refresh capability
+function refreshVersions() {
+    loadAvailableVersions().then(() => {
+        const select = document.getElementById('versionSelect');
+        select.disabled = false;
+    });
 }
 
 // Rider Management Functions

@@ -8,6 +8,7 @@ import http.server
 import socketserver
 import os
 import sys
+import json
 from pathlib import Path
 
 class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -16,6 +17,49 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()
+    
+    def do_GET(self):
+        # Handle API endpoint for version detection
+        if self.path == '/api/versions':
+            self.handle_versions_api()
+        else:
+            super().do_GET()
+    
+    def handle_versions_api(self):
+        """Return available CSV output versions as JSON"""
+        try:
+            csv_output_path = Path('csv_output')
+            versions = []
+            
+            if csv_output_path.exists() and csv_output_path.is_dir():
+                for item in csv_output_path.iterdir():
+                    if item.is_dir() and not item.name.startswith('.'):
+                        # Check if it contains the required CSV files
+                        required_files = ['input_orders.csv', 'input_riders.csv']
+                        if all((item / file).exists() for file in required_files):
+                            versions.append(item.name)
+            
+            versions.sort()
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                'versions': versions,
+                'count': len(versions),
+                'base_path': '/csv_output'
+            }
+            
+            self.wfile.write(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.send_error(500, f"Error detecting versions: {str(e)}")
+    
+    def log_message(self, format, *args):
+        # Suppress log messages for version API calls to reduce noise
+        if '/api/versions' not in args[0] if args else True:
+            super().log_message(format, *args)
 
 def main():
     port = 8080
